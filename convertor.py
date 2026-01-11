@@ -142,6 +142,9 @@ class FreeCADManualConverter:
             self._sync_cookies()
             
             print(f"Debug: Fetched {self.driver.current_url} successfully.")
+            # Сохраняем HTML для отладки
+            with open("debug_page.html", "w", encoding="utf-8") as f:
+                f.write(self.driver.page_source)
             return self.driver.page_source
         except Exception as e:
             print(f"Error fetching {url} with Selenium: {e}")

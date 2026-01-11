@@ -18,6 +18,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.options import Options
+from selenium_stealth import stealth
 
 
 class FreeCADManualConverter:
@@ -42,6 +43,17 @@ class FreeCADManualConverter:
         chrome_options.add_argument("--no-sandbox")
         try:
             driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=chrome_options)
+            
+            stealth(driver,
+                    languages=["en-US", "en"],
+                    vendor="Google Inc.",
+                    platform="Win32",
+                    webgl_vendor="Intel Inc.",
+                    renderer="Intel Iris OpenGL Engine",
+                    fix_hairline=True,
+                    )
+            
+            driver.set_page_load_timeout(120)
             print("Browser initialized.")
             return driver
         except Exception as e:
@@ -155,10 +167,21 @@ class FreeCADManualConverter:
             self.driver.get(url)
             time.sleep(5) # Increased wait time for JS challenges or dynamic content
             
+            # Сохраняем скриншот для отладки
+            self.driver.save_screenshot('debug_screenshot.png')
+            print("Debug: Screenshot saved to debug_screenshot.png")
+
             self._sync_cookies()
             
             print(f"Debug: Fetched {self.driver.current_url} successfully.")
-            return self.driver.page_source
+            
+            # Сохраняем HTML для отладки
+            html_content = self.driver.page_source
+            with open("debug_page.html", "w", encoding="utf-8") as f:
+                f.write(html_content)
+            print("Debug: HTML content saved to debug_page.html")
+
+            return html_content
         except Exception as e:
             print(f"Error fetching {url} with Selenium: {e}")
             return None

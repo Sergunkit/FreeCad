@@ -1,38 +1,54 @@
-import requests
-from weasyprint import HTML
-import os
-from bs4 import BeautifulSoup
-import re
-from PyPDF2 import PdfMerger
-from PIL import Image
-from io import BytesIO
+import hashlib
 import base64
-import cairosvg
-import ebooklib
-from ebooklib import epub
+import os
+import re
+import time
 import uuid
 from datetime import datetime
-import time
+from io import BytesIO
 
+import cairosvg
+import ebooklib
+import requests
+from PyPDF2 import PdfMerger
+from bs4 import BeautifulSoup
+from ebooklib import epub
+from PIL import Image, ImageDraw, ImageFont
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service as ChromeService
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 from selenium_stealth import stealth
+from weasyprint import HTML
+from webdriver_manager.chrome import ChromeDriverManager
 
 
 class FreeCADManualConverter:
     def __init__(self):
         self.session = requests.Session()
-        self.driver = self._init_driver()
-        if self.driver:
-            # Update session headers after driver is initialized
-            self.session.headers.update({
-                'User-Agent': self.driver.execute_script("return navigator.userAgent;")
-            })
+        self.driver = None  # Defer driver initialization
         self.toc_entries = []
         self.chapters_html = []
         self.image_cache = {}
+
+    def start_driver(self):
+        """Starts the driver if it's not already running."""
+        if not self.driver:
+            self.driver = self._init_driver()
+            if self.driver:
+                self.session.headers.update({
+                    'User-Agent': self.driver.execute_script("return navigator.userAgent;")
+                })
+
+    def restart_driver(self):
+        """Restarts the Selenium WebDriver."""
+        print("Restarting browser...")
+        self.close()
+        self.start_driver()
+        # A small delay to ensure the new browser session is fully ready
+        time.sleep(3)
 
     def _init_driver(self):
         """Initializes and returns a Selenium WebDriver."""
@@ -65,6 +81,7 @@ class FreeCADManualConverter:
         if self.driver:
             print("Closing browser.")
             self.driver.quit()
+            self.driver = None
 
     def _sync_cookies(self):
         """Syncs cookies from Selenium driver to requests session."""
@@ -104,6 +121,7 @@ class FreeCADManualConverter:
 
     def extract_manual_links(self, base_url="https://wiki.freecad.org/Manual:Introduction"):
         """Extract all manual links from the main Manual page."""
+        self.start_driver() # Ensure driver is running
         print(f"Fetching manual links from {base_url}...")
         html_content = self.fetch_page(base_url)
         if not html_content:
@@ -165,22 +183,16 @@ class FreeCADManualConverter:
         try:
             print(f"Fetching page via browser: {url}")
             self.driver.get(url)
-            time.sleep(5) # Increased wait time for JS challenges or dynamic content
+            # Use explicit wait for better reliability
+            WebDriverWait(self.driver, 120).until(
+                EC.presence_of_element_located((By.CLASS_NAME, "mw-parser-output"))
+            )
             
-            # Сохраняем скриншот для отладки
-            self.driver.save_screenshot('debug_screenshot.png')
-            print("Debug: Screenshot saved to debug_screenshot.png")
-
             self._sync_cookies()
             
-            print(f"Debug: Fetched {self.driver.current_url} successfully.")
+            print(f"Fetched {self.driver.current_url} successfully.")
             
-            # Сохраняем HTML для отладки
             html_content = self.driver.page_source
-            with open("debug_page.html", "w", encoding="utf-8") as f:
-                f.write(html_content)
-            print("Debug: HTML content saved to debug_page.html")
-
             return html_content
         except Exception as e:
             print(f"Error fetching {url} with Selenium: {e}")
@@ -190,7 +202,7 @@ class FreeCADManualConverter:
         """Extract content within the 'mw-parser-output' div, fix links, and process image paths."""
         soup = BeautifulSoup(html_content, 'html.parser')
 
-        for class_name in ['mw-pt-languages', 'docnav', 'NavFrame', 'manualtoc', 'toc', 'mw-jump-link', 'vector-header-container', 'mw-page-container-inner', 'mw-footer-container']:
+        for class_name in ['mw-pt-languages', 'docnav', 'NavFrame', 'manualtoc', 'toc', 'mw-jump-link', 'vector-header-container', 'mw-footer-container']:
             for element in soup.find_all(True, {'class': class_name}):
                 element.decompose()
             for element in soup.find_all(id=re.compile("p-.*")): # Removes sidebars etc.
@@ -351,7 +363,6 @@ class FreeCADManualConverter:
         
         # Add a simple cover
         try:
-            from PIL import Image, ImageDraw, ImageFont
             cover_img = Image.new('RGB', (800, 1200), color = '#2c3e50')
             draw = ImageDraw.Draw(cover_img)
             try:
@@ -426,12 +437,22 @@ class FreeCADManualConverter:
         pdf_files = []
         
         sorted_links = sorted(links.items())
+        processed_count = 0
+        restart_interval = 10  # Restart driver every 10 pages
 
         for chapter_number, (chapter_url, subchapters) in enumerate(sorted_links, start=1):
-            chapter_id = re.sub(r'[\W_]+', '_', chapter_url.split('/')[-1])
-            pdf_file = self.convert_to_pdf(chapter_url, chapter_number, chapter_id, subchapters, output_dir)
-            if pdf_file:
-                pdf_files.append(pdf_file)
+            if processed_count > 0 and processed_count % restart_interval == 0:
+                self.restart_driver()
+
+            try:
+                chapter_id = re.sub(r'[\W_]+', '_', chapter_url.split('/')[-1])
+                pdf_file = self.convert_to_pdf(chapter_url, chapter_number, chapter_id, subchapters, output_dir)
+                if pdf_file:
+                    pdf_files.append(pdf_file)
+                processed_count += 1
+            except Exception as e:
+                print(f"FATAL: Failed to process {chapter_url}. Error: {e}. Skipping...")
+                self.restart_driver() # Restart driver after a fatal error on a page
         
         toc_pdf_path = os.path.join(output_dir, '00_Table_of_Contents.pdf')
         self.generate_toc_pdf(toc_pdf_path)
@@ -444,6 +465,9 @@ class FreeCADManualConverter:
 
 def main():
     converter = FreeCADManualConverter()
+    # Start the driver manually for the first time
+    converter.start_driver()
+
     if not converter.driver:
         print("Failed to initialize Selenium WebDriver. Exiting.")
         return

@@ -1,3 +1,4 @@
+import argparse
 import hashlib
 import base64
 import os
@@ -119,8 +120,12 @@ class FreeCADManualConverter:
             print(f"Error converting SVG {svg_url} to PNG: {e}")
             return None
 
-    def extract_manual_links(self, base_url="https://wiki.freecad.org/Manual:Introduction"):
+    def extract_manual_links(self, lang=None):
         """Extract all manual links from the main Manual page."""
+        base_url = "https://wiki.freecad.org/Manual:Introduction"
+        if lang:
+            base_url += f"/{lang}"
+
         self.start_driver() # Ensure driver is running
         print(f"Fetching manual links from {base_url}...")
         html_content = self.fetch_page(base_url)
@@ -338,27 +343,29 @@ class FreeCADManualConverter:
     def merge_pdfs(self, pdf_files, output_file):
         print(f"Merging PDFs into {output_file}...")
         merger = PdfMerger()
-        for pdf in pdf_files:
-            if os.path.exists(pdf):
+        for pdf_path in pdf_files:
+            if os.path.exists(pdf_path):
                 try:
-                    merger.append(pdf)
+                    with open(pdf_path, 'rb') as f:
+                        merger.append(f)
                 except Exception as e:
-                    print(f"Could not append {pdf}: {e}")
+                    print(f"Could not append {pdf_path}: {e}")
             else:
-                print(f"File not found, skipping: {pdf}")
+                print(f"File not found, skipping: {pdf_path}")
         try:
-            merger.write(output_file)
+            with open(output_file, 'wb') as f:
+                merger.write(f)
             merger.close()
             print(f"Successfully created {output_file}")
         except Exception as e:
             print(f"Error merging PDFs: {e}")
 
-    def create_epub(self, output_file='FreeCAD_User_Manual.epub'):
+    def create_epub(self, output_file='FreeCAD_User_Manual.epub', lang='en'):
         print(f"Creating EPUB: {output_file}")
         book = epub.EpubBook()
         book.set_identifier(str(uuid.uuid4()))
         book.set_title('FreeCAD User Manual')
-        book.set_language('en')
+        book.set_language(lang)
         book.add_author('FreeCAD Community')
         
         # Add a simple cover
@@ -416,7 +423,7 @@ class FreeCADManualConverter:
                 except Exception as e:
                     print(f"Could not add image to EPUB: {e}")
 
-            chapter = epub.EpubHtml(title=chapter_data['title'], file_name=file_name, lang='en')
+            chapter = epub.EpubHtml(title=chapter_data['title'], file_name=file_name, lang=lang)
             chapter.content = f"<h2>{chapter_data['title']}</h2>{str(soup)}"
             chapter.add_item(default_css)
             book.add_item(chapter)
@@ -432,7 +439,7 @@ class FreeCADManualConverter:
         print(f"Successfully created {output_file}")
 
 
-    def batch_convert(self, links, output_dir='pdfs', merged_pdf='FreeCAD_User_Manual.pdf', create_epub_flag=True):
+    def batch_convert(self, links, output_dir='pdfs', merged_pdf='FreeCAD_User_Manual.pdf', create_epub_flag=True, lang=None):
         os.makedirs(output_dir, exist_ok=True)
         pdf_files = []
         
@@ -445,7 +452,10 @@ class FreeCADManualConverter:
                 self.restart_driver()
 
             try:
-                chapter_id = re.sub(r'[\W_]+', '_', chapter_url.split('/')[-1])
+                # Corrected chapter_id generation
+                slug = chapter_url.replace("https://wiki.freecad.org/Manual:", "")
+                chapter_id = re.sub(r'[\W_]+', '_', slug)
+                
                 pdf_file = self.convert_to_pdf(chapter_url, chapter_number, chapter_id, subchapters, output_dir)
                 if pdf_file:
                     pdf_files.append(pdf_file)
@@ -461,9 +471,16 @@ class FreeCADManualConverter:
         self.merge_pdfs(all_pdfs, merged_pdf)
 
         if create_epub_flag:
-            self.create_epub('FreeCAD_User_Manual.epub')
+            epub_file = 'FreeCAD_User_Manual.epub'
+            if lang:
+                epub_file = f'FreeCAD_User_Manual_{lang}.epub'
+            self.create_epub(epub_file, lang=lang or 'en')
 
 def main():
+    parser = argparse.ArgumentParser(description="Convert FreeCAD manual to PDF and EPUB.")
+    parser.add_argument("--lang", help="Language code for the manual (e.g., 'ru', 'de').")
+    args = parser.parse_args()
+
     converter = FreeCADManualConverter()
     # Start the driver manually for the first time
     converter.start_driver()
@@ -473,12 +490,17 @@ def main():
         return
         
     try:
-        manual_links = converter.extract_manual_links()
+        manual_links = converter.extract_manual_links(lang=args.lang)
         if manual_links:
+            merged_pdf = 'FreeCAD_User_Manual.pdf'
+            if args.lang:
+                merged_pdf = f'FreeCAD_User_Manual_{args.lang}.pdf'
+            
             converter.batch_convert(manual_links, 
                                     output_dir='pdfs',
-                                    merged_pdf='FreeCAD_User_Manual.pdf',
-                                    create_epub_flag=True)
+                                    merged_pdf=merged_pdf,
+                                    create_epub_flag=True,
+                                    lang=args.lang)
         else:
             print("No manual links were found. Cannot proceed.")
     except Exception as e:

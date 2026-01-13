@@ -1,0 +1,10 @@
+requests
+weasyprint
+beautifulsoup4
+PyPDF2
+Pillow
+cairosvg
+ebooklib
+selenium
+webdriver-manager
+selenium-stealth

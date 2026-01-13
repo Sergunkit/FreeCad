@@ -1,0 +1,18 @@
+# Virtual Environment
+venv/
+__pycache__/
+
+# Output files
+pdfs/
+*.pdf
+*.epub
+
+# Debug files
+debug_page.html
+debug_screenshot.png
+
+# macOS system files
+.DS_Store
+
+# Python cache
+*.pyc
